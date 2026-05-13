@@ -1,0 +1,47 @@
+curl -X POST http://localhost:8000/webhook/cpo/session \
+  -H "Content-Type: application/json" \
+  -d '{
+    "action": "MeterValues",
+    "idTag": "CHARGEFLOW_9876543210",
+    "charger_id": "CHARGER-001",
+    "transaction_id": 2001,
+    "meter_value": [{
+      "sampled_value": [{
+        "measurand": "Energy.Active.Import.Register",
+        "value": "12500",
+        "unit": "Wh"
+      }]
+    }]
+  }'
+
+BODY='{"action":"StopTransaction","idTag":"CHARGEFLOW_9876543210","charger_id":"CHARGER-001","transaction_id":1001,"meter_stop":19730}'
+SIG=$(echo -n "$BODY" | openssl dgst -sha256 -hmac "your_secret_here" | awk '{print $2}')
+curl -X POST http://localhost:8000/webhook/cpo/session \
+  -H "Content-Type: application/json" \
+  -H "x-signature: $SIG" \
+  -d "$BODY"
+
+
+curl -X POST http://localhost:8000/webhook/cpo/session \
+  -H "Content-Type: application/json" \
+  -d '{"action":"StartTransaction","idTag":"CHARGEFLOW_9876543210","charger_id":"CHARGER-001","transaction_id":3001,"meter_start":10000,"cpo_id":"pulse-energy"}'
+
+
+# Replace 'your_secret_here' with whatever is in your .env
+BODY='{"action":"StartTransaction","idTag":"CHARGEFLOW_9876543210","charger_id":"CHARGER-001","transaction_id":2001,"meter_start":10000,"cpo_id":"pulse-energy"}'
+SIG=$(echo -n "$BODY" | openssl dgst -sha256 -hmac "your_secret_here" | awk '{print $2}')
+
+curl -X POST http://localhost:8000/webhook/cpo/session \
+  -H "Content-Type: application/json" \
+  -H "x-signature: $SIG" \
+  -d "$BODY"
+
+
+Qwen2.5:14b
+
+http://127.0.0.1:11434
+
+
+
+
+
