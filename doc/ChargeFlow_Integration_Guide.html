@@ -1,0 +1,747 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ChargeFlow — BAP Integration Guide</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=JetBrains+Mono:wght@400;500&family=Instrument+Sans:ital,wght@0,400;0,500;1,400&display=swap');
+
+  :root {
+    --bg:       #080C10;
+    --surface:  #0E1419;
+    --surface2: #141B22;
+    --border:   #1E2A33;
+    --teal:     #00D4AA;
+    --teal-dim: #00D4AA22;
+    --amber:    #F4A261;
+    --red:      #E63946;
+    --text:     #E2EBF0;
+    --muted:    #5A7080;
+    --code-bg:  #0A1018;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Instrument Sans', sans-serif;
+    font-size: 15px;
+    line-height: 1.7;
+  }
+
+  /* ── Header ── */
+  header {
+    border-bottom: 1px solid var(--border);
+    padding: 2rem 3rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+    z-index: 100;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+
+  .logo {
+    font-family: 'Syne', sans-serif;
+    font-size: 1.35rem;
+    font-weight: 800;
+    letter-spacing: -.02em;
+    color: var(--teal);
+  }
+  .logo span { color: var(--text); }
+
+  .header-badge {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    padding: 3px 10px;
+    border: 1px solid var(--teal);
+    border-radius: 3px;
+    color: var(--teal);
+    letter-spacing: .05em;
+  }
+
+  .header-right { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; }
+
+  /* ── Layout ── */
+  .shell { display: flex; min-height: calc(100vh - 80px); }
+
+  nav {
+    width: 240px;
+    flex-shrink: 0;
+    border-right: 1px solid var(--border);
+    padding: 2rem 0;
+    position: sticky;
+    top: 80px;
+    height: calc(100vh - 80px);
+    overflow-y: auto;
+  }
+
+  nav a {
+    display: block;
+    padding: .45rem 1.5rem;
+    font-size: 13px;
+    color: var(--muted);
+    text-decoration: none;
+    border-left: 2px solid transparent;
+    transition: all .15s;
+  }
+  nav a:hover, nav a.active {
+    color: var(--teal);
+    border-left-color: var(--teal);
+    background: var(--teal-dim);
+  }
+  nav .nav-section {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    letter-spacing: .1em;
+    color: var(--muted);
+    padding: 1.25rem 1.5rem .4rem;
+    text-transform: uppercase;
+  }
+
+  main {
+    flex: 1;
+    padding: 3rem;
+    max-width: 860px;
+  }
+
+  /* ── Sections ── */
+  section { margin-bottom: 4rem; scroll-margin-top: 100px; }
+
+  h1 {
+    font-family: 'Syne', sans-serif;
+    font-size: 2.4rem;
+    font-weight: 800;
+    line-height: 1.1;
+    letter-spacing: -.03em;
+    margin-bottom: 1rem;
+  }
+  h1 em { color: var(--teal); font-style: normal; }
+
+  h2 {
+    font-family: 'Syne', sans-serif;
+    font-size: 1.4rem;
+    font-weight: 700;
+    margin-bottom: 1rem;
+    padding-bottom: .6rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  h3 {
+    font-family: 'Syne', sans-serif;
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--teal);
+    margin: 1.5rem 0 .5rem;
+  }
+
+  p { color: #9BB0BC; margin-bottom: .85rem; }
+
+  /* ── Cards ── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.25rem 1.5rem;
+    margin-bottom: 1rem;
+  }
+  .card.teal { border-color: var(--teal); background: var(--teal-dim); }
+  .card.amber { border-color: var(--amber); background: #F4A26111; }
+  .card.red   { border-color: var(--red);   background: #E6394611; }
+
+  .card-title {
+    font-family: 'Syne', sans-serif;
+    font-size: .85rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    margin-bottom: .5rem;
+  }
+  .card.teal .card-title  { color: var(--teal); }
+  .card.amber .card-title { color: var(--amber); }
+  .card.red .card-title   { color: var(--red); }
+
+  /* ── Flow diagram ── */
+  .flow { display: flex; flex-direction: column; gap: 0; margin: 1.5rem 0; }
+  .flow-item {
+    display: flex;
+    gap: 1rem;
+    align-items: flex-start;
+    padding: .75rem 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .flow-item:last-child { border: none; }
+  .flow-num {
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    background: var(--teal);
+    color: var(--bg);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    font-weight: 500;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+  .flow-content { flex: 1; }
+  .flow-title { font-weight: 500; color: var(--text); font-size: .9rem; }
+  .flow-sub { font-size: .82rem; color: var(--muted); margin-top: 2px; }
+
+  /* ── Endpoint blocks ── */
+  .endpoint {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 1.5rem;
+    overflow: hidden;
+  }
+  .endpoint-head {
+    display: flex;
+    align-items: center;
+    gap: .75rem;
+    padding: .9rem 1.25rem;
+    background: var(--surface2);
+    cursor: pointer;
+    user-select: none;
+  }
+  .endpoint-head:hover { background: #1A2530; }
+  .method {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 500;
+    padding: 2px 8px;
+    border-radius: 3px;
+    background: var(--teal);
+    color: var(--bg);
+    flex-shrink: 0;
+  }
+  .path {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    color: var(--text);
+    flex: 1;
+  }
+  .ep-title {
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .chevron {
+    color: var(--muted);
+    font-size: 12px;
+    transition: transform .2s;
+  }
+  .endpoint.open .chevron { transform: rotate(180deg); }
+
+  .endpoint-body { display: none; padding: 1.25rem; border-top: 1px solid var(--border); }
+  .endpoint.open .endpoint-body { display: block; }
+
+  /* ── Code blocks ── */
+  .code-wrap { position: relative; margin: .75rem 0; }
+  .code-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--muted);
+    padding: .4rem .75rem;
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-bottom: none;
+    border-radius: 5px 5px 0 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 0 0 5px 5px;
+    padding: 1rem 1.25rem;
+    overflow-x: auto;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    line-height: 1.65;
+    color: #A8C0CC;
+  }
+  pre.no-label { border-radius: 5px; }
+  .k { color: #7EC8E3; }   /* keys */
+  .s { color: #98C379; }   /* strings */
+  .n { color: var(--teal); } /* numbers */
+  .c { color: var(--muted); font-style: italic; } /* comments */
+
+  .copy-btn {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    padding: 2px 8px;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    transition: all .15s;
+  }
+  .copy-btn:hover { color: var(--teal); border-color: var(--teal); }
+
+  /* ── Table ── */
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 13px; }
+  th {
+    background: var(--surface2);
+    padding: .6rem .85rem;
+    text-align: left;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    border-bottom: 1px solid var(--border);
+  }
+  td {
+    padding: .6rem .85rem;
+    border-bottom: 1px solid var(--border);
+    color: #9BB0BC;
+    vertical-align: top;
+  }
+  td:first-child {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--teal);
+    white-space: nowrap;
+  }
+  tr:last-child td { border: none; }
+
+  /* ── Badge ── */
+  .badge {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    padding: 2px 7px;
+    border-radius: 3px;
+    display: inline-block;
+  }
+  .badge-teal  { background: var(--teal-dim); color: var(--teal); border: 1px solid var(--teal); }
+  .badge-amber { background: #F4A26111; color: var(--amber); border: 1px solid var(--amber); }
+  .badge-red   { background: #E6394611; color: var(--red);   border: 1px solid var(--red); }
+  .badge-grey  { background: var(--surface2); color: var(--muted); border: 1px solid var(--border); }
+
+  /* ── Download button ── */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: .5rem;
+    padding: .6rem 1.25rem;
+    border-radius: 5px;
+    font-family: 'Syne', sans-serif;
+    font-size: .85rem;
+    font-weight: 600;
+    cursor: pointer;
+    text-decoration: none;
+    transition: all .15s;
+    border: none;
+  }
+  .btn-primary { background: var(--teal); color: var(--bg); }
+  .btn-primary:hover { background: #00BFAA; }
+  .btn-outline { background: transparent; color: var(--teal); border: 1px solid var(--teal); }
+  .btn-outline:hover { background: var(--teal-dim); }
+
+  .btn-row { display: flex; gap: .75rem; flex-wrap: wrap; margin: 1.25rem 0; }
+
+  /* ── Scrollbar ── */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div style="display:flex;align-items:center;gap:1rem">
+    <div class="logo">Charge<span>Flow</span></div>
+    <div class="header-badge">BAP INTEGRATION GUIDE v1.0</div>
+  </div>
+  <div class="header-right">
+    <span class="badge badge-teal">UEI Beckn Protocol</span>
+    <span class="badge badge-amber">ON-FULFILLMENT · PR #308</span>
+    <span class="badge badge-grey">OCPP 1.6J</span>
+  </div>
+</header>
+
+<div class="shell">
+  <nav id="nav">
+    <div class="nav-section">Overview</div>
+    <a href="#overview" class="active">Introduction</a>
+    <a href="#architecture">Architecture</a>
+    <a href="#quickstart">Quick Start</a>
+
+    <div class="nav-section">Beckn BPP API</div>
+    <a href="#search">/search</a>
+    <a href="#select">/select</a>
+    <a href="#init">/init</a>
+    <a href="#confirm">/confirm ★</a>
+    <a href="#status">/status</a>
+    <a href="#update">/update</a>
+
+    <div class="nav-section">Webhooks</div>
+    <a href="#cpo-webhook">CPO Session Events</a>
+    <a href="#payment-webhook">Payment Confirmation</a>
+
+    <div class="nav-section">Reference</div>
+    <a href="#callbacks">BAP Callbacks</a>
+    <a href="#errors">Error Codes</a>
+    <a href="#environments">Environments</a>
+  </nav>
+
+  <main>
+
+    <!-- OVERVIEW -->
+    <section id="overview">
+      <h1>Integrate <em>postpaid</em><br>EV charging</h1>
+      <p>ChargeFlow is a UEI Beckn BPP that enables postpaid metered EV charging sessions — the driver scans a QR, charges, and pays the <strong style="color:var(--text)">exact kWh amount</strong> after the session ends via UPI collect. No wallet, no pre-payment, no app download required.</p>
+
+      <div class="card teal">
+        <div class="card-title">Payment model</div>
+        <p style="margin:0;font-size:14px">Payment type <code style="color:var(--teal);font-family:JetBrains Mono,monospace">ON-FULFILLMENT</code> per UEI spec PR #308. Driver is charged the verified kWh amount after session ends — not before. Cable lock enforces payment before connector releases.</p>
+      </div>
+
+      <div class="btn-row">
+        <a class="btn btn-primary" href="ChargeFlow_Postman_Collection.json" download>⬇ Download Postman Collection</a>
+        <a class="btn btn-outline" href="#quickstart">Quick Start →</a>
+      </div>
+
+      <h3>What you integrate as a BAP</h3>
+      <div class="flow">
+        <div class="flow-item">
+          <div class="flow-num">1</div>
+          <div class="flow-content">
+            <div class="flow-title">Call 6 Beckn endpoints</div>
+            <div class="flow-sub">search → select → init → confirm → status → update</div>
+          </div>
+        </div>
+        <div class="flow-item">
+          <div class="flow-num">2</div>
+          <div class="flow-content">
+            <div class="flow-title">Receive async callbacks on your BAP URI</div>
+            <div class="flow-sub">on_search · on_confirm · on_status (live cost every 30s) · on_update</div>
+          </div>
+        </div>
+        <div class="flow-item">
+          <div class="flow-num">3</div>
+          <div class="flow-content">
+            <div class="flow-title">Display live cost and receipt to driver</div>
+            <div class="flow-sub">LIVE-METER tag during session · SESSION-SUMMARY tag after payment</div>
+          </div>
+        </div>
+      </div>
+
+      <h3>What ChargeFlow handles for you</h3>
+      <p>OCPP bridge to CPO chargers · session state machine · tariff + GST calculation · UPI collect trigger · cable lock enforcement · watchdog for power failure · payment retry escalation · MongoDB audit log</p>
+    </section>
+
+    <!-- ARCHITECTURE -->
+    <section id="architecture">
+      <h2>Architecture</h2>
+      <p>ChargeFlow sits between your BAP app and the CPO's CSMS — handling the OCPP protocol, session metering, and UPI collect flow transparently.</p>
+
+      <div class="code-wrap">
+        <div class="code-label">Data flow</div>
+        <pre>Your App (BAP)
+    │  Beckn search/confirm/status
+    ▼
+ChargeFlow BPP  ──── Redis (session state)
+    │               MongoDB (audit log)
+    │  CHARGEFLOW_ idTag + webhook
+    ▼
+CPO CSMS (Pulse Energy / Kazam)
+    │  OCPP 1.6J
+    ▼
+Physical Charger (CCS2 + cable lock)
+    │  After payment confirmed
+    └── UnlockConnector → cable releases</pre>
+      </div>
+
+      <h3>CPO side — configuration only</h3>
+      <p>The CPO makes <strong style="color:var(--text)">zero code changes</strong>. They configure one webhook routing rule in their CSMS admin panel:</p>
+      <div class="code-wrap">
+        <div class="code-label">CPO CSMS configuration</div>
+        <pre><span class="c"># If idTag starts with CHARGEFLOW_</span>
+<span class="c"># POST session events to ChargeFlow webhook</span>
+
+Condition : idTag.startsWith(<span class="s">"CHARGEFLOW_"</span>)
+Action    : POST to https://api.chargeflow.in/webhook/cpo/session
+Events    : StartTransaction · MeterValues · StopTransaction</pre>
+      </div>
+    </section>
+
+    <!-- QUICK START -->
+    <section id="quickstart">
+      <h2>Quick Start</h2>
+
+      <h3>1 — Register your BAP</h3>
+      <p>Contact ChargeFlow to register your BAP ID and URI. You will receive a BPP endpoint and your BAP credentials.</p>
+      <table>
+        <tr><th>Variable</th><th>Description</th><th>Example</th></tr>
+        <tr><td>BAP_ID</td><td>Your BAP identifier</td><td>pulse-energy.in</td></tr>
+        <tr><td>BAP_URI</td><td>Your callback base URL</td><td>https://api.pulseenergy.in</td></tr>
+        <tr><td>BPP_ID</td><td>ChargeFlow BPP ID</td><td>chargeflow.in</td></tr>
+        <tr><td>BPP_URI</td><td>ChargeFlow endpoint</td><td>https://api.chargeflow.in</td></tr>
+      </table>
+
+      <h3>2 — Set up your callback endpoint</h3>
+      <p>ChargeFlow sends all responses asynchronously to your BAP URI. You must expose these routes:</p>
+      <div class="code-wrap">
+        <div class="code-label">BAP callback endpoints to implement</div>
+        <pre>POST /on_search   ← charger catalogue
+POST /on_select   ← tariff breakdown
+POST /on_init     ← order draft
+POST /on_confirm  ← session started
+POST /on_status   ← live cost (every 30s) + final
+POST /on_update   ← session receipt</pre>
+      </div>
+
+      <h3>3 — Complete a test session</h3>
+      <p>Import the Postman collection and run the requests in order: search → select → init → confirm → status → update. Each returns an ACK immediately — check your BAP callback logs for the actual response data.</p>
+
+      <div class="card amber">
+        <div class="card-title">Beckn async pattern</div>
+        <p style="margin:0;font-size:13px;color:#9BB0BC">Every endpoint returns <code style="color:var(--teal);font-family:JetBrains Mono,monospace">{"message":{"ack":{"status":"ACK"}}}</code> immediately. The actual response data is sent to your BAP_URI callback. This is mandatory in the Beckn protocol — never wait for data in the initial response.</p>
+      </div>
+    </section>
+
+    <!-- ENDPOINTS -->
+    <section id="search">
+      <h2>Beckn BPP Endpoints</h2>
+
+      <div class="endpoint" id="ep-search">
+        <div class="endpoint-head" onclick="toggle('ep-search')">
+          <span class="method">POST</span>
+          <span class="path">/beckn/search</span>
+          <span class="ep-title">Find chargers near location</span>
+          <span class="chevron">▼</span>
+        </div>
+        <div class="endpoint-body">
+          <p>Search for ON-FULFILLMENT capable DC fast chargers near a GPS location. Include <code style="color:var(--teal);font-family:JetBrains Mono,monospace">payment.type: "ON-FULFILLMENT"</code> in intent to filter postpaid-only chargers.</p>
+          <div class="code-wrap">
+            <div class="code-label">Request body <button class="copy-btn" onclick="copyCode(this)">copy</button></div>
+            <pre>{
+  <span class="k">"context"</span>: {
+    <span class="k">"domain"</span>: <span class="s">"ev-charging:uei"</span>,
+    <span class="k">"action"</span>: <span class="s">"search"</span>,
+    <span class="k">"bap_id"</span>: <span class="s">"YOUR_BAP_ID"</span>,
+    <span class="k">"bap_uri"</span>: <span class="s">"https://your-bap.com"</span>,
+    <span class="k">"transaction_id"</span>: <span class="s">"txn-001"</span>
+  },
+  <span class="k">"message"</span>: {
+    <span class="k">"intent"</span>: {
+      <span class="k">"fulfillment"</span>: {
+        <span class="k">"end"</span>: { <span class="k">"location"</span>: { <span class="k">"gps"</span>: <span class="s">"12.9716,77.5946"</span> } }
+      },
+      <span class="k">"payment"</span>: { <span class="k">"type"</span>: <span class="s">"ON-FULFILLMENT"</span> }
+    }
+  }
+}</pre>
+          </div>
+          <p style="font-size:13px">Callback: ChargeFlow sends <code style="color:var(--teal);font-family:JetBrains Mono,monospace">on_search</code> to your BAP_URI with charger catalogue including connector type, power rating, tariff, and location.</p>
+        </div>
+      </div>
+
+      <div class="endpoint" id="ep-confirm">
+        <div class="endpoint-head" onclick="toggle('ep-confirm')">
+          <span class="method">POST</span>
+          <span class="path">/beckn/confirm</span>
+          <span class="ep-title" style="color:var(--teal)">★ Confirm postpaid session</span>
+          <span class="chevron">▼</span>
+        </div>
+        <div class="endpoint-body">
+          <p>The key action. Driver confirms the postpaid session. ChargeFlow calls the CPO API to start the charging session.</p>
+
+          <div class="card red">
+            <div class="card-title">Critical — must use ON-FULFILLMENT</div>
+            <p style="margin:0;font-size:13px">payments[0].type must be <code style="color:var(--teal);font-family:JetBrains Mono,monospace">"ON-FULFILLMENT"</code> (with hyphen). If you send <code style="color:var(--red);font-family:JetBrains Mono,monospace">"PRE-FULFILLMENT"</code> or <code style="color:var(--red);font-family:JetBrains Mono,monospace">"ON_FULFILLMENT"</code> the request is rejected.</p>
+          </div>
+
+          <div class="code-wrap">
+            <div class="code-label">Request body — payments object <button class="copy-btn" onclick="copyCode(this)">copy</button></div>
+            <pre><span class="k">"payments"</span>: [
+  {
+    <span class="k">"type"</span>:         <span class="s">"ON-FULFILLMENT"</span>,  <span class="c">← PR #308 — postpaid</span>
+    <span class="k">"status"</span>:       <span class="s">"NOT-PAID"</span>,        <span class="c">← driver has not paid yet</span>
+    <span class="k">"collected_by"</span>: <span class="s">"BPP"</span>,             <span class="c">← ChargeFlow collects</span>
+    <span class="k">"params"</span>: {
+      <span class="k">"vpa"</span>:      <span class="s">"driver@ybl"</span>,      <span class="c">← driver UPI ID</span>
+      <span class="k">"currency"</span>: <span class="s">"INR"</span>
+    }
+  }
+]</pre>
+          </div>
+
+          <h3>What happens after confirm</h3>
+          <div class="flow">
+            <div class="flow-item">
+              <div class="flow-num">1</div>
+              <div class="flow-content">
+                <div class="flow-title">ChargeFlow → CPO API: RemoteStartTransaction</div>
+                <div class="flow-sub">idTag = CHARGEFLOW_{driver_phone}</div>
+              </div>
+            </div>
+            <div class="flow-item">
+              <div class="flow-num">2</div>
+              <div class="flow-content">
+                <div class="flow-title">CPO CSMS → Charger: session starts</div>
+                <div class="flow-sub">Physical charger begins dispensing energy</div>
+              </div>
+            </div>
+            <div class="flow-item">
+              <div class="flow-num">3</div>
+              <div class="flow-content">
+                <div class="flow-title">ChargeFlow → BAP: on_confirm (ACTIVE)</div>
+                <div class="flow-sub">Session confirmed, order ID returned</div>
+              </div>
+            </div>
+            <div class="flow-item">
+              <div class="flow-num">4</div>
+              <div class="flow-content">
+                <div class="flow-title">ChargeFlow → BAP: on_status every 30s</div>
+                <div class="flow-sub">LIVE-METER tag: kWh consumed + cost so far</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="endpoint" id="ep-status">
+        <div class="endpoint-head" onclick="toggle('ep-status')">
+          <span class="method">POST</span>
+          <span class="path">/beckn/status</span>
+          <span class="ep-title">Live cost · session state</span>
+          <span class="chevron">▼</span>
+        </div>
+        <div class="endpoint-body">
+          <p>Poll session status. ChargeFlow also <strong style="color:var(--text)">pushes on_status automatically every 30 seconds</strong> — you only need to call this for on-demand checks.</p>
+
+          <h3>LIVE-METER tag (during session)</h3>
+          <div class="code-wrap">
+            <div class="code-label">on_status callback payload — CHARGING state</div>
+            <pre><span class="k">"tags"</span>: [{
+  <span class="k">"descriptor"</span>: { <span class="k">"code"</span>: <span class="s">"LIVE-METER"</span> },
+  <span class="k">"list"</span>: [
+    { <span class="k">"descriptor"</span>: {<span class="k">"code"</span>: <span class="s">"KWH-CONSUMED"</span>}, <span class="k">"value"</span>: <span class="s">"3.42"</span> },
+    { <span class="k">"descriptor"</span>: {<span class="k">"code"</span>: <span class="s">"COST-SO-FAR"</span>},  <span class="k">"value"</span>: <span class="s">"61.56"</span> },
+    { <span class="k">"descriptor"</span>: {<span class="k">"code"</span>: <span class="s">"TARIFF"</span>},       <span class="k">"value"</span>: <span class="s">"18.0"</span> },
+    { <span class="k">"descriptor"</span>: {<span class="k">"code"</span>: <span class="s">"CURRENCY"</span>},     <span class="k">"value"</span>: <span class="s">"INR"</span> }
+  ]
+}]</pre>
+          </div>
+
+          <h3>SESSION-SUMMARY tag (after payment)</h3>
+          <div class="code-wrap">
+            <div class="code-label">on_update callback payload — COMPLETE state</div>
+            <pre><span class="k">"tags"</span>: [{
+  <span class="k">"descriptor"</span>: { <span class="k">"code"</span>: <span class="s">"SESSION-SUMMARY"</span> },
+  <span class="k">"list"</span>: [
+    { <span class="k">"descriptor"</span>: {<span class="k">"code"</span>: <span class="s">"TOTAL-KWH"</span>},    <span class="k">"value"</span>: <span class="s">"9.730"</span> },
+    { <span class="k">"descriptor"</span>: {<span class="k">"code"</span>: <span class="s">"BASE-AMOUNT"</span>},  <span class="k">"value"</span>: <span class="s">"175.14"</span> },
+    { <span class="k">"descriptor"</span>: {<span class="k">"code"</span>: <span class="s">"GST-AMOUNT"</span>},   <span class="k">"value"</span>: <span class="s">"31.53"</span> },
+    { <span class="k">"descriptor"</span>: {<span class="k">"code"</span>: <span class="s">"FINAL-COST"</span>},   <span class="k">"value"</span>: <span class="s">"206.67"</span> },
+    { <span class="k">"descriptor"</span>: {<span class="k">"code"</span>: <span class="s">"UPI-TXN-ID"</span>},   <span class="k">"value"</span>: <span class="s">"UPI2025..."</span> }
+  ]
+}],
+<span class="k">"payments"</span>: [{
+  <span class="k">"type"</span>:   <span class="s">"ON-FULFILLMENT"</span>,
+  <span class="k">"status"</span>: <span class="s">"PAID"</span>            <span class="c">← changed from NOT-PAID</span>
+}]</pre>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- CALLBACKS -->
+    <section id="callbacks">
+      <h2>BAP Callbacks</h2>
+      <p>ChargeFlow calls these endpoints on your BAP_URI asynchronously. Implement all six to handle the complete session lifecycle.</p>
+
+      <table>
+        <tr><th>Callback</th><th>When sent</th><th>Key data</th></tr>
+        <tr><td>POST /on_search</td><td>After /search</td><td>Charger catalogue with tariffs</td></tr>
+        <tr><td>POST /on_select</td><td>After /select</td><td>Tariff breakdown + GST</td></tr>
+        <tr><td>POST /on_init</td><td>After /init</td><td>Order draft + payment terms</td></tr>
+        <tr><td>POST /on_confirm</td><td>After /confirm</td><td>Session ACTIVE + order ID</td></tr>
+        <tr><td>POST /on_status</td><td>Every 30s during session + on payment</td><td>LIVE-METER tag · SESSION-SUMMARY tag</td></tr>
+        <tr><td>POST /on_update</td><td>After /update</td><td>Final receipt + PAID status</td></tr>
+      </table>
+
+      <div class="card amber">
+        <div class="card-title">Your callback must return 200 OK</div>
+        <p style="margin:0;font-size:13px">ChargeFlow expects a 200 response from your callback within 10 seconds. If your endpoint is unreachable, on_status callbacks for live cost will be dropped for that interval — the session continues normally.</p>
+      </div>
+    </section>
+
+    <!-- ERRORS -->
+    <section id="errors">
+      <h2>Error Codes</h2>
+      <table>
+        <tr><th>Code</th><th>Description</th><th>Resolution</th></tr>
+        <tr><td>INVALID_PAYMENT_TYPE</td><td>payment.type is not ON-FULFILLMENT</td><td>Use exactly "ON-FULFILLMENT" with hyphen</td></tr>
+        <tr><td>DRIVER_WATCHLIST</td><td>Driver has outstanding dues</td><td>Driver must clear previous payment or pay ₹50 deposit</td></tr>
+        <tr><td>CHARGER_NOT_FOUND</td><td>Charger ID not in catalogue</td><td>Use charger ID from on_search response</td></tr>
+        <tr><td>CPO_START_FAILED</td><td>CPO API RemoteStart rejected</td><td>Check charger is available and CPO webhook is configured</td></tr>
+        <tr><td>SESSION_NOT_FOUND</td><td>order_id not found in active sessions</td><td>Session may have expired — start new session</td></tr>
+      </table>
+    </section>
+
+    <!-- ENVIRONMENTS -->
+    <section id="environments">
+      <h2>Environments</h2>
+      <table>
+        <tr><th>Environment</th><th>Base URL</th><th>Notes</th></tr>
+        <tr><td>Production</td><td>https://api.chargeflow.in</td><td>AWS Mumbai ap-south-1 · Real UPI collect</td></tr>
+        <tr><td>Sandbox</td><td>http://localhost:8000</td><td>Local development · Razorpay sandbox</td></tr>
+      </table>
+
+      <h3>Test credentials (sandbox)</h3>
+      <div class="code-wrap">
+        <div class="code-label">.env for local testing</div>
+        <pre>CHARGEFLOW_BASE_URL=http://localhost:8000
+CHARGER_ID=CHARGER-001
+DRIVER_PHONE=9876543210
+DRIVER_VPA=driver@ybl</pre>
+      </div>
+
+      <div class="btn-row" style="margin-top:2rem">
+        <a class="btn btn-primary" href="ChargeFlow_Postman_Collection.json" download>⬇ Postman Collection</a>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<script>
+  function toggle(id) {
+    document.getElementById(id).classList.toggle('open');
+  }
+
+  function copyCode(btn) {
+    const pre = btn.closest('.code-wrap').querySelector('pre');
+    navigator.clipboard.writeText(pre.innerText).then(() => {
+      btn.textContent = 'copied!';
+      btn.style.color = 'var(--teal)';
+      setTimeout(() => { btn.textContent = 'copy'; btn.style.color = ''; }, 1500);
+    });
+  }
+
+  // Active nav on scroll
+  const sections = document.querySelectorAll('section[id]');
+  const navLinks = document.querySelectorAll('nav a');
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        navLinks.forEach(a => a.classList.remove('active'));
+        const match = document.querySelector(`nav a[href="#${e.target.id}"]`);
+        if (match) match.classList.add('active');
+      }
+    });
+  }, { rootMargin: '-20% 0px -70% 0px' });
+  sections.forEach(s => observer.observe(s));
+</script>
+</body>
+</html>

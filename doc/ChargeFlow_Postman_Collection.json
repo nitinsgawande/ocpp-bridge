@@ -1,0 +1,317 @@
+{
+  "info": {
+    "name": "ChargeFlow — BAP Integration",
+    "description": "Complete Postman collection for integrating with ChargeFlow's UEI Beckn BPP.\n\nCovers the full postpaid EV charging session flow:\n  search → select → init → confirm (ON-FULFILLMENT) → status → update\n\nPayment type: ON-FULFILLMENT per UEI spec PR #308\nDriver pays exact kWh amount AFTER session ends via UPI collect.\n\nBase URL: set CHARGEFLOW_BASE_URL variable to your deployment endpoint.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "version": "1.0.0"
+  },
+  "variable": [
+    {
+      "key": "CHARGEFLOW_BASE_URL",
+      "value": "https://api.chargeflow.in",
+      "description": "ChargeFlow BPP base URL — change to your endpoint"
+    },
+    {
+      "key": "BAP_ID",
+      "value": "your-bap.example.com",
+      "description": "Your BAP identifier registered on UEI gateway"
+    },
+    {
+      "key": "BAP_URI",
+      "value": "https://your-bap.example.com",
+      "description": "Your BAP callback URL for on_* responses"
+    },
+    {
+      "key": "TRANSACTION_ID",
+      "value": "txn-test-001",
+      "description": "Unique transaction ID for this session"
+    },
+    {
+      "key": "MESSAGE_ID",
+      "value": "msg-test-001",
+      "description": "Unique message ID — change for each request"
+    },
+    {
+      "key": "DRIVER_PHONE",
+      "value": "9876543210",
+      "description": "Driver mobile number"
+    },
+    {
+      "key": "DRIVER_VPA",
+      "value": "driver@ybl",
+      "description": "Driver UPI VPA for collect request"
+    },
+    {
+      "key": "CHARGER_ID",
+      "value": "CHARGER-001",
+      "description": "Charger ID from search results"
+    },
+    {
+      "key": "ORDER_ID",
+      "value": "order_CHARGER-001_9876543210",
+      "description": "Order ID from on_confirm response"
+    }
+  ],
+  "item": [
+    {
+      "name": "1 — Health Check",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{CHARGEFLOW_BASE_URL}}/health",
+          "host": ["{{CHARGEFLOW_BASE_URL}}"],
+          "path": ["health"]
+        },
+        "description": "Verify the ChargeFlow bridge is running and healthy."
+      },
+      "response": [
+        {
+          "name": "Health OK",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"status\":\"ok\",\"service\":\"chargeflow-bridge\",\"timestamp\":\"2025-04-14T10:00:00Z\"}"
+        }
+      ]
+    },
+    {
+      "name": "2 — Search Chargers",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"context\": {\n    \"domain\": \"ev-charging:uei\",\n    \"action\": \"search\",\n    \"version\": \"1.1.0\",\n    \"bap_id\": \"{{BAP_ID}}\",\n    \"bap_uri\": \"{{BAP_URI}}\",\n    \"bpp_id\": \"chargeflow.in\",\n    \"bpp_uri\": \"{{CHARGEFLOW_BASE_URL}}\",\n    \"transaction_id\": \"{{TRANSACTION_ID}}\",\n    \"message_id\": \"{{MESSAGE_ID}}\",\n    \"timestamp\": \"2025-04-14T10:00:00.000Z\",\n    \"ttl\": \"PT30S\"\n  },\n  \"message\": {\n    \"intent\": {\n      \"fulfillment\": {\n        \"end\": {\n          \"location\": {\n            \"gps\": \"12.9716,77.5946\",\n            \"radius\": {\n              \"value\": \"5\",\n              \"unit\": \"km\"\n            }\n          }\n        }\n      },\n      \"payment\": {\n        \"type\": \"ON-FULFILLMENT\"\n      }\n    }\n  }\n}"
+        },
+        "url": {
+          "raw": "{{CHARGEFLOW_BASE_URL}}/beckn/search",
+          "host": ["{{CHARGEFLOW_BASE_URL}}"],
+          "path": ["beckn", "search"]
+        },
+        "description": "Search for DC fast chargers near a GPS location.\n\nNote payment.type = ON-FULFILLMENT in the intent — this filters for postpaid-capable chargers only.\n\nResponse: ACK immediately. ChargeFlow sends on_search to your BAP_URI callback with the charger catalogue."
+      },
+      "response": [
+        {
+          "name": "ACK",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"message\":{\"ack\":{\"status\":\"ACK\"}}}"
+        }
+      ]
+    },
+    {
+      "name": "3 — Select Charger",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"context\": {\n    \"domain\": \"ev-charging:uei\",\n    \"action\": \"select\",\n    \"version\": \"1.1.0\",\n    \"bap_id\": \"{{BAP_ID}}\",\n    \"bap_uri\": \"{{BAP_URI}}\",\n    \"bpp_id\": \"chargeflow.in\",\n    \"bpp_uri\": \"{{CHARGEFLOW_BASE_URL}}\",\n    \"transaction_id\": \"{{TRANSACTION_ID}}\",\n    \"message_id\": \"{{MESSAGE_ID}}\",\n    \"timestamp\": \"2025-04-14T10:00:05.000Z\"\n  },\n  \"message\": {\n    \"order\": {\n      \"provider\": {\n        \"id\": \"{{CHARGER_ID}}\"\n      },\n      \"items\": [\n        {\n          \"id\": \"{{CHARGER_ID}}\"\n        }\n      ]\n    }\n  }\n}"
+        },
+        "url": {
+          "raw": "{{CHARGEFLOW_BASE_URL}}/beckn/select",
+          "host": ["{{CHARGEFLOW_BASE_URL}}"],
+          "path": ["beckn", "select"]
+        },
+        "description": "Select a specific charger from search results.\n\nUse the charger ID returned in on_search catalogue.\n\nResponse: ACK immediately. ChargeFlow sends on_select to your BAP_URI with tariff breakdown (base rate + GST)."
+      },
+      "response": [
+        {
+          "name": "ACK",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"message\":{\"ack\":{\"status\":\"ACK\"}}}"
+        }
+      ]
+    },
+    {
+      "name": "4 — Init Order",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"context\": {\n    \"domain\": \"ev-charging:uei\",\n    \"action\": \"init\",\n    \"version\": \"1.1.0\",\n    \"bap_id\": \"{{BAP_ID}}\",\n    \"bap_uri\": \"{{BAP_URI}}\",\n    \"bpp_id\": \"chargeflow.in\",\n    \"bpp_uri\": \"{{CHARGEFLOW_BASE_URL}}\",\n    \"transaction_id\": \"{{TRANSACTION_ID}}\",\n    \"message_id\": \"{{MESSAGE_ID}}\",\n    \"timestamp\": \"2025-04-14T10:00:10.000Z\"\n  },\n  \"message\": {\n    \"order\": {\n      \"provider\": {\n        \"id\": \"{{CHARGER_ID}}\"\n      },\n      \"items\": [\n        {\n          \"id\": \"{{CHARGER_ID}}\"\n        }\n      ],\n      \"fulfillments\": [\n        {\n          \"customer\": {\n            \"contact\": {\n              \"phone\": \"{{DRIVER_PHONE}}\"\n            },\n            \"person\": {\n              \"name\": \"Test Driver\"\n            }\n          }\n        }\n      ],\n      \"payments\": [\n        {\n          \"type\": \"ON-FULFILLMENT\",\n          \"params\": {\n            \"vpa\": \"{{DRIVER_VPA}}\",\n            \"currency\": \"INR\"\n          }\n        }\n      ]\n    }\n  }\n}"
+        },
+        "url": {
+          "raw": "{{CHARGEFLOW_BASE_URL}}/beckn/init",
+          "host": ["{{CHARGEFLOW_BASE_URL}}"],
+          "path": ["beckn", "init"]
+        },
+        "description": "Initialise the order with driver details and payment method.\n\nKey fields:\n  - fulfillments[0].customer.contact.phone — driver mobile number\n  - payments[0].type = ON-FULFILLMENT — postpaid (PR #308)\n  - payments[0].params.vpa — driver UPI ID for collect request\n\nResponse: ACK immediately. ChargeFlow sends on_init with order terms and ON-FULFILLMENT payment confirmation."
+      },
+      "response": [
+        {
+          "name": "ACK",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"message\":{\"ack\":{\"status\":\"ACK\"}}}"
+        }
+      ]
+    },
+    {
+      "name": "5 — Confirm Session (ON-FULFILLMENT)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"context\": {\n    \"domain\": \"ev-charging:uei\",\n    \"action\": \"confirm\",\n    \"version\": \"1.1.0\",\n    \"bap_id\": \"{{BAP_ID}}\",\n    \"bap_uri\": \"{{BAP_URI}}\",\n    \"bpp_id\": \"chargeflow.in\",\n    \"bpp_uri\": \"{{CHARGEFLOW_BASE_URL}}\",\n    \"transaction_id\": \"{{TRANSACTION_ID}}\",\n    \"message_id\": \"{{MESSAGE_ID}}\",\n    \"timestamp\": \"2025-04-14T10:00:15.000Z\"\n  },\n  \"message\": {\n    \"order\": {\n      \"provider\": {\n        \"id\": \"{{CHARGER_ID}}\"\n      },\n      \"items\": [\n        {\n          \"id\": \"{{CHARGER_ID}}\",\n          \"quantity\": {\n            \"measure\": {\n              \"unit\": \"kWh\",\n              \"maximum\": {\n                \"value\": \"50\"\n              }\n            }\n          }\n        }\n      ],\n      \"fulfillments\": [\n        {\n          \"id\": \"session-001\",\n          \"type\": \"EV-CHARGING\",\n          \"customer\": {\n            \"contact\": {\n              \"phone\": \"{{DRIVER_PHONE}}\"\n            },\n            \"person\": {\n              \"name\": \"Test Driver\"\n            }\n          }\n        }\n      ],\n      \"payments\": [\n        {\n          \"type\": \"ON-FULFILLMENT\",\n          \"status\": \"NOT-PAID\",\n          \"collected_by\": \"BPP\",\n          \"params\": {\n            \"vpa\": \"{{DRIVER_VPA}}\",\n            \"currency\": \"INR\"\n          }\n        }\n      ]\n    }\n  }\n}"
+        },
+        "url": {
+          "raw": "{{CHARGEFLOW_BASE_URL}}/beckn/confirm",
+          "host": ["{{CHARGEFLOW_BASE_URL}}"],
+          "path": ["beckn", "confirm"]
+        },
+        "description": "Confirm the postpaid session. This is the key action per PR #308.\n\nCritical fields:\n  - payments[0].type = ON-FULFILLMENT (not PRE-FULFILLMENT)\n  - payments[0].status = NOT-PAID (driver has not paid yet)\n  - payments[0].collected_by = BPP\n\nWhat happens after confirm:\n  1. ChargeFlow calls CPO API → RemoteStartTransaction with CHARGEFLOW_{phone} idTag\n  2. CPO CSMS starts session on the physical charger\n  3. ChargeFlow sends on_confirm with order status ACTIVE\n  4. Live meter updates sent via on_status every 30 seconds\n\nNote: If driver is on bad debt watchlist, on_confirm returns FAILED with error code DRIVER_WATCHLIST."
+      },
+      "response": [
+        {
+          "name": "ACK",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"message\":{\"ack\":{\"status\":\"ACK\"}}}"
+        }
+      ]
+    },
+    {
+      "name": "6 — Get Live Status (LIVE-METER)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"context\": {\n    \"domain\": \"ev-charging:uei\",\n    \"action\": \"status\",\n    \"version\": \"1.1.0\",\n    \"bap_id\": \"{{BAP_ID}}\",\n    \"bap_uri\": \"{{BAP_URI}}\",\n    \"bpp_id\": \"chargeflow.in\",\n    \"bpp_uri\": \"{{CHARGEFLOW_BASE_URL}}\",\n    \"transaction_id\": \"{{TRANSACTION_ID}}\",\n    \"message_id\": \"{{MESSAGE_ID}}\",\n    \"timestamp\": \"2025-04-14T10:05:00.000Z\"\n  },\n  \"message\": {\n    \"order_id\": \"{{ORDER_ID}}\"\n  }\n}"
+        },
+        "url": {
+          "raw": "{{CHARGEFLOW_BASE_URL}}/beckn/status",
+          "host": ["{{CHARGEFLOW_BASE_URL}}"],
+          "path": ["beckn", "status"]
+        },
+        "description": "Poll live session status during charging.\n\nChargeFlow also PUSHES on_status to your BAP_URI every 30 seconds automatically — you do not need to poll. Use this endpoint for on-demand status checks.\n\nResponse includes LIVE-METER tag (PR #308):\n  - KWH-CONSUMED — energy consumed so far\n  - COST-SO-FAR — running cost in INR including GST\n  - TARIFF — rate per kWh\n\nWhen session ends, response includes SESSION-SUMMARY tag with final cost."
+      },
+      "response": [
+        {
+          "name": "ACK",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"message\":{\"ack\":{\"status\":\"ACK\"}}}"
+        }
+      ]
+    },
+    {
+      "name": "7 — Get Final Settlement (SESSION-SUMMARY)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"context\": {\n    \"domain\": \"ev-charging:uei\",\n    \"action\": \"update\",\n    \"version\": \"1.1.0\",\n    \"bap_id\": \"{{BAP_ID}}\",\n    \"bap_uri\": \"{{BAP_URI}}\",\n    \"bpp_id\": \"chargeflow.in\",\n    \"bpp_uri\": \"{{CHARGEFLOW_BASE_URL}}\",\n    \"transaction_id\": \"{{TRANSACTION_ID}}\",\n    \"message_id\": \"{{MESSAGE_ID}}\",\n    \"timestamp\": \"2025-04-14T10:45:00.000Z\"\n  },\n  \"message\": {\n    \"order\": {\n      \"id\": \"{{ORDER_ID}}\"\n    }\n  }\n}"
+        },
+        "url": {
+          "raw": "{{CHARGEFLOW_BASE_URL}}/beckn/update",
+          "host": ["{{CHARGEFLOW_BASE_URL}}"],
+          "path": ["beckn", "update"]
+        },
+        "description": "Get final session settlement after payment is confirmed.\n\nCall this after receiving on_status with payment.status = PAID.\n\nResponse includes SESSION-SUMMARY tag (PR #308):\n  - TOTAL-KWH — total energy consumed\n  - BASE-AMOUNT — cost before GST\n  - GST-AMOUNT — 18% GST\n  - FINAL-COST — total amount charged\n  - UPI-TXN-ID — UPI transaction reference\n  - payments[0].status = PAID\n\nUse this data to display the receipt in your app."
+      },
+      "response": [
+        {
+          "name": "ACK",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"message\":{\"ack\":{\"status\":\"ACK\"}}}"
+        }
+      ]
+    },
+    {
+      "name": "CPO Webhook — StartTransaction",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "x-signature", "value": "{{CPO_WEBHOOK_SIG}}", "description": "HMAC-SHA256 of body using shared secret" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"action\": \"StartTransaction\",\n  \"idTag\": \"CHARGEFLOW_{{DRIVER_PHONE}}\",\n  \"charger_id\": \"{{CHARGER_ID}}\",\n  \"transaction_id\": 1001,\n  \"meter_start\": 10000,\n  \"cpo_id\": \"pulse-energy\",\n  \"timestamp\": \"2025-04-14T10:00:20.000Z\"\n}"
+        },
+        "url": {
+          "raw": "{{CHARGEFLOW_BASE_URL}}/webhook/cpo/session",
+          "host": ["{{CHARGEFLOW_BASE_URL}}"],
+          "path": ["webhook", "cpo", "session"]
+        },
+        "description": "CPO CSMS sends this when a CHARGEFLOW_ session starts on the charger.\n\nKey fields:\n  - idTag must start with CHARGEFLOW_ prefix\n  - meter_start in Wh (divide by 1000 for kWh)\n  - transaction_id is the OCPP transaction ID\n\nNote: CPO does not need to call this manually — their CSMS sends it automatically based on the idTag routing rule configured in their admin panel."
+      }
+    },
+    {
+      "name": "CPO Webhook — MeterValues",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"action\": \"MeterValues\",\n  \"idTag\": \"CHARGEFLOW_{{DRIVER_PHONE}}\",\n  \"charger_id\": \"{{CHARGER_ID}}\",\n  \"transaction_id\": 1001,\n  \"meter_value\": [\n    {\n      \"timestamp\": \"2025-04-14T10:05:00.000Z\",\n      \"sampled_value\": [\n        {\n          \"measurand\": \"Energy.Active.Import.Register\",\n          \"value\": \"12500\",\n          \"unit\": \"Wh\",\n          \"context\": \"Sample.Periodic\"\n        }\n      ]\n    }\n  ]\n}"
+        },
+        "url": {
+          "raw": "{{CHARGEFLOW_BASE_URL}}/webhook/cpo/session",
+          "host": ["{{CHARGEFLOW_BASE_URL}}"],
+          "path": ["webhook", "cpo", "session"]
+        },
+        "description": "CPO CSMS sends this every 30 seconds with live energy readings.\n\nKey fields:\n  - measurand = Energy.Active.Import.Register\n  - value in Wh (e.g. 12500 = 12.5 kWh absolute meter reading)\n  - ChargeFlow computes delta from session start for billing\n\nChargeFlow uses this to update last_meter_ts for watchdog power failure detection."
+      }
+    },
+    {
+      "name": "CPO Webhook — StopTransaction",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"action\": \"StopTransaction\",\n  \"idTag\": \"CHARGEFLOW_{{DRIVER_PHONE}}\",\n  \"charger_id\": \"{{CHARGER_ID}}\",\n  \"transaction_id\": 1001,\n  \"meter_stop\": 19730,\n  \"reason\": \"EVDisconnected\",\n  \"timestamp\": \"2025-04-14T10:45:00.000Z\"\n}"
+        },
+        "url": {
+          "raw": "{{CHARGEFLOW_BASE_URL}}/webhook/cpo/session",
+          "host": ["{{CHARGEFLOW_BASE_URL}}"],
+          "path": ["webhook", "cpo", "session"]
+        },
+        "description": "CPO CSMS sends this when the driver unplugs.\n\nKey fields:\n  - meter_stop in Wh — authoritative final meter reading\n  - reason: EVDisconnected | Local | Remote | EmergencyStop\n\nWhat ChargeFlow does after receiving this:\n  1. Computes exact kWh = (meter_stop - meter_start) / 1000\n  2. Applies tariff + 18% GST\n  3. Triggers UPI collect to driver phone\n  4. Cable stays locked until payment confirmed\n  5. On payment: calls CPO API to UnlockConnector"
+      }
+    },
+    {
+      "name": "Payment Webhook — Juspay Confirm",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"order_id\": \"CHARGEFLOW_{{CHARGER_ID}}_1001\",\n  \"status\": \"CHARGED\",\n  \"txn_id\": \"UPI20250414123456\",\n  \"amount\": \"206.67\",\n  \"payment_method\": \"UPI\",\n  \"upi_txn_id\": \"UPI20250414123456\"\n}"
+        },
+        "url": {
+          "raw": "{{CHARGEFLOW_BASE_URL}}/webhook/juspay/payment",
+          "host": ["{{CHARGEFLOW_BASE_URL}}"],
+          "path": ["webhook", "juspay", "payment"]
+        },
+        "description": "Juspay/Razorpay sends this after driver approves UPI collect.\n\norder_id format: CHARGEFLOW_{charger_id}_{transaction_id}\n\nOn CHARGED status:\n  1. Session marked COMPLETE in Redis\n  2. MongoDB audit updated\n  3. Cable unlock published to Redis pub/sub\n  4. CPO API called → UnlockConnector → cable releases\n  5. Receipt sent to driver via SMS"
+      }
+    }
+  ]
+}
