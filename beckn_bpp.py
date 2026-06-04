@@ -358,24 +358,71 @@ async def beckn_confirm(request: dict, bg: BackgroundTasks):
         )
         return ack_response()
 
+    # ── Block reserve funds (UPI single-block-multiple-debit) ─────────────────
+    # Look up charger specs to size the reserve, then block before starting.
+    from upi_collect import calculate_reserve, create_block
+
+    charger  = next((c for c in CHARGER_CATALOGUE if c["id"] == charger_id), None)
+    power_kw = charger["power_kw"]       if charger else 60
+    tariff   = charger["tariff_per_kwh"] if charger else 18.0
+    reserve  = calculate_reserve(power_kw, tariff)
+
+    block = create_block(
+        charger_id=charger_id,
+        transaction_id=0,                 # txn not known yet — keyed by phone below
+        reserve_amount=reserve,
+        driver_phone=driver_phone,
+        driver_vpa=driver_vpa
+    )
+
+    if not block:
+        # Block failed — cannot start session. Return FAILED in on_confirm.
+        log.error(f"[{charger_id}] UPI block failed — aborting confirm")
+        bg.add_task(
+            send_callback,
+            "on_confirm",
+            {
+                "context": build_context(context, "on_confirm"),
+                "message": {
+                    "order": {
+                        "status": "FAILED",
+                        "error": {
+                            "code":    "UPI_BLOCK_FAILED",
+                            "message": "Could not reserve funds. Please try again."
+                        }
+                    }
+                }
+            },
+            bap_uri
+        )
+        return ack_response()
+
+    mandate_id = block["mandate_id"]
+
     # ── Start session via CPO API ─────────────────────────────────────────────
     idtag          = f"{IDTAG_PREFIX}{driver_phone}"
     session_started = await _remote_start(charger_id, idtag)
     order_id        = f"order_{charger_id}_{driver_phone}"
     order_status    = "ACTIVE" if session_started else "FAILED"
 
-    # Store bap_uri and order_id in Redis for on_status callbacks
+    # Store bap_uri, order_id, mandate_id + reserve in Redis for handle_start
     if session_started:
         # Transaction ID not yet known — will be set when StartTransaction
         # webhook arrives. Store a pending entry keyed by charger + idtag.
         r_client = store.r
         pending_key = f"pending_confirm:{charger_id}:{idtag}"
         r_client.hset(pending_key, mapping={
-            "bap_uri":  bap_uri,
-            "order_id": order_id,
-            "driver_vpa": driver_vpa,
+            "bap_uri":        bap_uri,
+            "order_id":       order_id,
+            "driver_vpa":     driver_vpa,
+            "mandate_id":     mandate_id,
+            "reserve_amount": reserve,
         })
         r_client.expire(pending_key, 300)   # 5 min TTL — StartTransaction expected soon
+    else:
+        # CPO failed to start — release the block we just created
+        from upi_collect import release_block
+        release_block(charger_id, 0, mandate_id)
 
     bg.add_task(
         send_callback,

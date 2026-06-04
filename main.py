@@ -6,10 +6,11 @@ ChargeFlow FastAPI bridge service.
 Responsibilities:
   - Receive CPO session event webhooks (StartTransaction, MeterValues, StopTransaction)
   - Route only CHARGEFLOW_ prefixed sessions — all prepaid sessions ignored
-  - Trigger UPI collect after session ends
+  - BLOCK-DEBIT: capture exact amount from pre-blocked funds at session end
+  - POSTPAID:    trigger UPI collect after session ends (fallback model)
   - Receive Juspay payment confirmation webhook
   - Publish cable unlock event via Redis pub/sub after payment
-  - Startup recovery — resume in-flight sessions from Postgres after crash
+  - Startup recovery — resume in-flight sessions from MongoDB after crash
 
 Run with:
   uvicorn main:app --host 0.0.0.0 --port 8000 --reload
@@ -31,7 +32,7 @@ from fastapi import FastAPI, Header, HTTPException, Request
 import session_store as store
 from cable_lock import publish_unlock
 from tariff_calculator import compute_cost, format_receipt, get_tariff
-from upi_collect import trigger_collect
+from upi_collect import trigger_collect, capture_block, release_block
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
@@ -66,13 +67,11 @@ app = FastAPI(
 from beckn_bpp import router as beckn_router
 app.include_router(beckn_router)
 
+
 # ─── Signature verification ──────────────────────────────────────────────────
 
 def verify_signature(body: bytes, sig: str) -> bool:
-    """
-    Verify CPO webhook HMAC-SHA256 signature.
-    Skipped in dev when WEBHOOK_SECRET is not set.
-    """
+    """Verify CPO webhook HMAC-SHA256 signature. Skipped in dev when no secret."""
     if not WEBHOOK_SECRET:
         return True
     expected = hmac.new(
@@ -92,20 +91,17 @@ async def cpo_session_webhook(
     Receives OCPP session events from the CPO CSMS.
     Only processes sessions whose idTag starts with CHARGEFLOW_.
     All prepaid / wallet sessions are ignored — returned immediately.
-
-    CPO must configure their CSMS to POST to this endpoint for
-    StartTransaction, MeterValues, and StopTransaction events.
     """
-    body  = await request.body()
+    body = await request.body()
 
     if not verify_signature(body, x_signature):
         raise HTTPException(status_code=401, detail="Invalid webhook signature")
 
     event  = json.loads(body)
-    action = event.get("action", "")   # StartTransaction | MeterValues | StopTransaction
+    action = event.get("action", "")
     idtag  = event.get("idTag", "")
 
-    # ── Route guard: ignore all non-ChargeFlow sessions ──────────────────────
+    # Route guard: ignore all non-ChargeFlow sessions
     if not idtag.startswith(IDTAG_PREFIX):
         return {"status": "ignored", "reason": "not a ChargeFlow session"}
 
@@ -116,13 +112,10 @@ async def cpo_session_webhook(
 
     if action == "StartTransaction":
         await handle_start(charger_id, transaction_id, event, idtag)
-
     elif action == "MeterValues":
         await handle_meter(charger_id, transaction_id, event)
-
     elif action == "StopTransaction":
         await handle_stop(charger_id, transaction_id, event)
-
     else:
         log.warning(f"Unknown action in CPO webhook: {action}")
 
@@ -135,7 +128,7 @@ async def handle_start(charger_id: str, transaction_id: int,
                         event: dict, idtag: str):
     """
     Handle StartTransaction — create Redis session and audit log row.
-    Extracts driver phone from idTag: CHARGEFLOW_9876543210 → 9876543210
+    Attaches block-debit mandate from the pending_confirm entry if present.
     """
     driver_phone = idtag.replace(IDTAG_PREFIX, "")
     meter_start  = event.get("meter_start", 0)
@@ -153,7 +146,27 @@ async def handle_start(charger_id: str, transaction_id: int,
     )
     store.transition(charger_id, transaction_id, "CHARGING")
 
-    # Write-through to Postgres
+    # ── Attach block-debit mandate from pending_confirm (if Beckn confirm ran) ──
+    pending_key = f"pending_confirm:{charger_id}:{idtag}"
+    pending     = store.r.hgetall(pending_key)
+    if pending and pending.get("mandate_id"):
+        key = store.session_key(charger_id, transaction_id)
+        store.r.hset(key, mapping={
+            "mandate_id":     pending["mandate_id"],
+            "reserve_amount": pending.get("reserve_amount", "0.00"),
+            "bap_uri":        pending.get("bap_uri", ""),
+            "order_id":       pending.get("order_id", ""),
+            "payment_mode":   "BLOCK_DEBIT",
+        })
+        store.r.delete(pending_key)
+        log.info(f"[{charger_id}] Attached mandate {pending['mandate_id']} "
+                 f"(BLOCK_DEBIT) to txn={transaction_id}")
+    else:
+        # No mandate — pure postpaid session
+        store.r.hset(store.session_key(charger_id, transaction_id),
+                     "payment_mode", "POSTPAID")
+
+    # Write-through to MongoDB audit log
     await store.write_audit(
         charger_id=charger_id,
         transaction_id=transaction_id,
@@ -172,7 +185,7 @@ async def handle_start(charger_id: str, transaction_id: int,
 
 async def handle_meter(charger_id: str, transaction_id: int, event: dict):
     """
-    Handle MeterValues — update Redis live cost and append to Postgres meter_log.
+    Handle MeterValues — update Redis live cost and append to MongoDB meter_log.
     Updates last_meter_ts which the watchdog uses to detect power failure.
     """
     for mv in event.get("meter_value", []):
@@ -181,21 +194,19 @@ async def handle_meter(charger_id: str, transaction_id: int, event: dict):
             if measurand != "Energy.Active.Import.Register":
                 continue
 
-            kwh_live  = float(sv.get("value", 0)) / 1000   # Wh → kWh
+            kwh_live  = float(sv.get("value", 0)) / 1000
             cost_live = store.update_live_meter(
                 charger_id, transaction_id, kwh_live
             )
 
-            session   = store.get_session(charger_id, transaction_id)
+            session = store.get_session(charger_id, transaction_id)
             if session:
                 delta = kwh_live - float(session.get("kwh_start", 0))
                 log.info(
                     f"[{charger_id}] LIVE METER | "
-                    f"consumed={delta:.3f} kWh | "
-                    f"cost=₹{cost_live:.2f}"
+                    f"consumed={delta:.3f} kWh | cost=₹{cost_live:.2f}"
                 )
 
-            # Append to Postgres meter_log for billing dispute audit trail
             await store.log_meter(
                 charger_id=charger_id,
                 transaction_id=transaction_id,
@@ -206,8 +217,9 @@ async def handle_meter(charger_id: str, transaction_id: int, event: dict):
 
 async def handle_stop(charger_id: str, transaction_id: int, event: dict):
     """
-    Handle StopTransaction — finalise session, compute exact cost, trigger UPI collect.
-    Handles orphan case: StopTransaction with no matching Redis session.
+    Handle StopTransaction — finalise session, compute exact cost.
+    BLOCK_DEBIT: capture exact amount from blocked funds, unlock immediately.
+    POSTPAID:    trigger UPI collect, wait for payment, then unlock.
     """
     meter_stop = event.get("meter_stop", 0)
     kwh_stop   = meter_stop / 1000
@@ -215,7 +227,7 @@ async def handle_stop(charger_id: str, transaction_id: int, event: dict):
     # ── Orphan guard: no matching session in Redis ────────────────────────────
     existing = store.get_session(charger_id, transaction_id)
     if not existing:
-        kwh_consumed = kwh_stop  # meter_stop is absolute, no baseline known
+        kwh_consumed = kwh_stop
         if kwh_consumed < 0.1:
             log.warning(f"[{charger_id}] Orphan StopTransaction — "
                         f"near-zero kWh ({kwh_consumed:.3f}), skipping billing")
@@ -224,8 +236,7 @@ async def handle_stop(charger_id: str, transaction_id: int, event: dict):
             log.warning(f"[{charger_id}] Orphan StopTransaction — "
                         f"{kwh_consumed:.3f} kWh, creating recovery session")
             idtag = event.get("idTag", IDTAG_PREFIX + "unknown")
-            store.create_session(charger_id, transaction_id,
-                                  0, 18.0, idtag)
+            store.create_session(charger_id, transaction_id, 0, 18.0, idtag)
             store.transition(charger_id, transaction_id, "CHARGING")
 
     # Finalise: compute exact cost, move to PENDING_PAYMENT
@@ -242,7 +253,7 @@ async def handle_stop(charger_id: str, transaction_id: int, event: dict):
     )
     print(format_receipt(result))
 
-    # Update Postgres with final cost
+    # Update MongoDB with final cost
     await store.write_audit(
         charger_id=charger_id,
         transaction_id=transaction_id,
@@ -251,17 +262,58 @@ async def handle_stop(charger_id: str, transaction_id: int, event: dict):
         cost_final=result["total_payable"]
     )
 
-    # Extract driver phone from idTag
     driver_phone = session.get("id_tag", "").replace(IDTAG_PREFIX, "")
     if not driver_phone or driver_phone == "unknown":
         log.error(f"[{charger_id}] No driver phone for txn={transaction_id} — cannot collect")
         return
 
-    # Trigger UPI payment request for exact amount
+    payment_mode = session.get("payment_mode", "POSTPAID")
+    mandate_id   = session.get("mandate_id", "")
+    exact_amount = result["total_payable"]
+
+    # ── BLOCK-DEBIT path: capture exact amount from blocked funds ─────────────
+    if payment_mode == "BLOCK_DEBIT" and mandate_id:
+        kwh_total = float(session.get("kwh_total", 0))
+
+        if kwh_total < 0.05:
+            # Near-zero consumption — release the full block, charge nothing
+            release_block(charger_id, transaction_id, mandate_id)
+            store.mark_failed(charger_id, transaction_id,
+                              "Near-zero kWh — block released")
+            log.info(f"[{charger_id}] Block released, no charge | txn={transaction_id}")
+            return
+
+        capture = capture_block(
+            charger_id=charger_id,
+            transaction_id=transaction_id,
+            mandate_id=mandate_id,
+            exact_amount=exact_amount
+        )
+
+        if capture and capture.get("status") == "CAPTURED":
+            # Payment secured immediately — mark COMPLETE and unlock cable
+            store.mark_paid(charger_id, transaction_id, capture["upi_txn_id"])
+            await store.write_audit(
+                charger_id=charger_id,
+                transaction_id=transaction_id,
+                status="COMPLETE",
+                upi_txn_id=capture["upi_txn_id"]
+            )
+            publish_unlock(charger_id, transaction_id, capture["upi_txn_id"])
+            log.info(f"[{charger_id}] CAPTURED ₹{exact_amount} from block | "
+                     f"cable unlocking | txn={transaction_id}")
+        else:
+            # Capture failed — fall back to postpaid collect as safety net
+            log.error(f"[{charger_id}] Capture failed, falling back to collect")
+            trigger_collect(charger_id, transaction_id,
+                            exact_amount, driver_phone, "EV Driver")
+        return
+
+    # ── POSTPAID path: trigger UPI collect (driver pays, then unlock) ─────────
     trigger_collect(
         charger_id=charger_id,
         transaction_id=transaction_id,
-        amount_inr=result["total_payable"],
+        amount_inr=exact_amount,
         driver_phone=driver_phone,
         driver_name="EV Driver"
     )
@@ -272,15 +324,8 @@ async def handle_stop(charger_id: str, transaction_id: int, event: dict):
 @app.post("/webhook/juspay/payment")
 async def juspay_payment_webhook(request: Request):
     """
-    Receives payment confirmation from Juspay after driver approves UPI collect.
-
-    Juspay order_id format: CHARGEFLOW_{charger_id}_{transaction_id}
-    e.g. CHARGEFLOW_CHARGER-001_1001
-
-    On CHARGED status:
-      1. Mark session COMPLETE in Redis
-      2. Write to Postgres audit log
-      3. Publish unlock event → cable_lock subscriber → CPO API UnlockConnector
+    Receives payment confirmation from Juspay/Razorpay (postpaid path).
+    order_id format: CHARGEFLOW_{charger_id}_{transaction_id}
     """
     body  = await request.body()
     event = json.loads(body)
@@ -296,9 +341,6 @@ async def juspay_payment_webhook(request: Request):
         log.info(f"Juspay webhook ignored — status={payment_status}")
         return {"status": "ignored"}
 
-    # Parse charger_id and transaction_id from order_id
-    # Format: CHARGEFLOW_{charger_id}_{transaction_id}
-    # Example: CHARGEFLOW_CHARGER-001_1001
     parts = order_id.replace(IDTAG_PREFIX, "", 1).rsplit("_", 1)
     if len(parts) != 2:
         log.error(f"Cannot parse order_id: {order_id}")
@@ -307,10 +349,8 @@ async def juspay_payment_webhook(request: Request):
     charger_id     = parts[0]
     transaction_id = int(parts[1])
 
-    # Mark session COMPLETE in Redis
     store.mark_paid(charger_id, transaction_id, upi_txn_id)
 
-    # Write to Postgres
     await store.write_audit(
         charger_id=charger_id,
         transaction_id=transaction_id,
@@ -319,11 +359,8 @@ async def juspay_payment_webhook(request: Request):
     )
 
     log.info(f"[{charger_id}] Payment CONFIRMED | "
-             f"txn={transaction_id} | "
-             f"upi={upi_txn_id} | "
-             f"amount=₹{amount_inr}")
+             f"txn={transaction_id} | upi={upi_txn_id} | amount=₹{amount_inr}")
 
-    # Publish unlock event — cable_lock subscriber sends UnlockConnector to CPO
     publish_unlock(
         charger_id=charger_id,
         transaction_id=transaction_id,
@@ -338,9 +375,7 @@ async def juspay_payment_webhook(request: Request):
 async def cable_lock_subscriber():
     """
     Background task — subscribes to Redis unlock:* pub/sub channel.
-    When payment confirms, upi_collect publishes to unlock:{charger_id}.
-    This subscriber calls the CPO REST API to send UnlockConnector.
-    Runs for the lifetime of the process.
+    When payment confirms, calls the CPO REST API to send UnlockConnector.
     """
     import redis.asyncio as aioredis
 
@@ -365,8 +400,7 @@ async def cable_lock_subscriber():
             if not success:
                 log.error(
                     f"[{charger_id}] CPO unlock FAILED after payment | "
-                    f"txn={transaction_id} | "
-                    f"OPS ALERT: manual cable release needed"
+                    f"txn={transaction_id} | OPS ALERT: manual cable release needed"
                 )
         except Exception as e:
             log.error(f"Cable lock subscriber error: {e}")
@@ -375,13 +409,9 @@ async def cable_lock_subscriber():
 async def send_unlock_to_cpo(charger_id: str,
                               transaction_id: int,
                               connector_id: int = 1) -> bool:
-    """
-    Call CPO REST API to send UnlockConnector to the charger.
-    Only ever called after payment is confirmed — this is the cable release.
-    """
+    """Call CPO REST API to send UnlockConnector. Only after payment confirmed."""
     if not CPO_API_BASE:
-        log.warning(f"[{charger_id}] CPO_API_BASE_URL not set — "
-                    f"simulating unlock for local testing")
+        log.warning(f"[{charger_id}] CPO_API_BASE_URL not set — simulating unlock")
         log.info(f"[{charger_id}] ✅ CABLE RELEASED (simulated) | txn={transaction_id}")
         return True
 
@@ -390,41 +420,33 @@ async def send_unlock_to_cpo(charger_id: str,
             resp = await client.post(
                 f"{CPO_API_BASE}/chargers/{charger_id}/unlock",
                 headers={"Authorization": f"Bearer {CPO_API_KEY}"},
-                json={
-                    "transaction_id": transaction_id,
-                    "connector_id":   connector_id
-                },
+                json={"transaction_id": transaction_id, "connector_id": connector_id},
                 timeout=10.0
             )
             if resp.status_code == 200:
-                log.info(f"[{charger_id}] ✅ CABLE RELEASED via CPO API | "
-                         f"txn={transaction_id}")
+                log.info(f"[{charger_id}] ✅ CABLE RELEASED via CPO API | txn={transaction_id}")
                 return True
             else:
-                log.error(f"[{charger_id}] CPO unlock API error: "
-                          f"{resp.status_code} {resp.text}")
+                log.error(f"[{charger_id}] CPO unlock API error: {resp.status_code} {resp.text}")
                 return False
     except Exception as e:
         log.error(f"[{charger_id}] CPO unlock exception: {e}")
         return False
 
 
-# ─── Startup recovery ─────────────────────────────────────────────────────────
+# ─── Startup recovery (MongoDB) ──────────────────────────────────────────────
 
 async def startup_recovery():
     """
-    On service restart: query MongoDB for sessions that were
-    CHARGING or PENDING_PAYMENT at time of crash / restart.
-    Re-seeds Redis from MongoDB so in-flight sessions resume correctly.
-    Watchdog and payment_poller will pick them up immediately.
+    On service restart: query MongoDB for sessions that were CHARGING or
+    PENDING_PAYMENT at time of crash. Re-seeds Redis so they resume correctly.
     """
-    await asyncio.sleep(2)   # wait for DB connection to settle
+    await asyncio.sleep(2)
 
     try:
         from db import session_audit_col
         import redis as sync_redis
 
-        # Query MongoDB for all in-flight sessions
         cursor   = session_audit_col().find(
             {"status": {"$in": ["CHARGING", "PENDING_PAYMENT"]}}
         )
@@ -444,7 +466,6 @@ async def startup_recovery():
             charger_id     = s.get("charger_id", "")
             transaction_id = s.get("transaction_id", 0)
             key            = f"session:{charger_id}:{transaction_id}"
-
             if not r.exists(key):
                 r.hset(key, mapping={
                     "charger_id":     charger_id,
@@ -468,19 +489,16 @@ async def startup_recovery():
                 log.warning(f"[{charger_id}] Recovered {s.get('status')} session "
                              f"txn={transaction_id} from MongoDB")
 
-        log.info(
-            f"Startup recovery complete — {recovered} sessions re-seeded in Redis"
-        )
+        log.info(f"Startup recovery complete — {recovered} sessions re-seeded in Redis")
 
     except Exception as e:
         log.error(f"Startup recovery failed: {e}")
 
 
-# ─── Health check ─────────────────────────────────────────────────────────────
+# ─── Health + session status ─────────────────────────────────────────────────
 
 @app.get("/health")
 async def health():
-    """ALB health check endpoint."""
     return {
         "status":    "ok",
         "service":   "chargeflow-bridge",
@@ -488,14 +506,8 @@ async def health():
     }
 
 
-# ─── Session status API (ops dashboard) ──────────────────────────────────────
-
 @app.get("/session/{charger_id}/{transaction_id}")
 async def get_session_status(charger_id: str, transaction_id: int):
-    """
-    Returns current session state.
-    Used by: ops dashboard, driver self-service payment confirmation.
-    """
     session = store.get_session(charger_id, transaction_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
