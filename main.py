@@ -374,36 +374,58 @@ async def juspay_payment_webhook(request: Request):
 
 async def cable_lock_subscriber():
     """
-    Background task — subscribes to Redis unlock:* pub/sub channel.
-    When payment confirms, calls the CPO REST API to send UnlockConnector.
+    Background task — consumes unlock events from a Redis LIST queue.
+
+    Reliability: uses BLPOP (blocking pop) on the 'unlock_queue' list.
+    Unlike pub/sub (at-most-once, lost if subscriber is disconnected),
+    a list queue persists each event until it is consumed — at-least-once
+    delivery that survives subscriber restarts and dropped connections.
+
+    If the connection drops, the loop reconnects and any events enqueued
+    in the meantime are still waiting in the list. Nothing is lost.
     """
     import redis.asyncio as aioredis
 
-    redis_url    = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-    redis_client = aioredis.Redis.from_url(redis_url, decode_responses=True)
-    pubsub       = redis_client.pubsub()
-    await pubsub.psubscribe("unlock:*")
-    log.info("Cable lock subscriber listening on unlock:*")
+    redis_url        = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    UNLOCK_QUEUE_KEY = "unlock_queue"
+    log.info("Cable lock consumer listening on unlock_queue (BLPOP)")
 
-    async for message in pubsub.listen():
-        if message["type"] != "pmessage":
-            continue
+    while True:
         try:
-            data           = json.loads(message["data"])
-            charger_id     = data["charger_id"]
-            transaction_id = data["transaction_id"]
-            upi_txn_id     = data["upi_txn_id"]
+            redis_client = aioredis.Redis.from_url(redis_url, decode_responses=True)
+            while True:
+                # BLPOP blocks until an item is available (timeout 5s, then loop).
+                # Returns (queue_key, message) tuple, or None on timeout.
+                result = await redis_client.blpop(UNLOCK_QUEUE_KEY, timeout=5)
+                if result is None:
+                    continue   # timeout — loop and keep waiting
 
-            log.info(f"[{charger_id}] Unlock event received | txn={transaction_id}")
-            success = await send_unlock_to_cpo(charger_id, transaction_id)
+                _, raw = result
+                try:
+                    data           = json.loads(raw)
+                    charger_id     = data["charger_id"]
+                    transaction_id = data["transaction_id"]
+                    upi_txn_id     = data["upi_txn_id"]
 
-            if not success:
-                log.error(
-                    f"[{charger_id}] CPO unlock FAILED after payment | "
-                    f"txn={transaction_id} | OPS ALERT: manual cable release needed"
-                )
+                    log.info(f"[{charger_id}] Unlock event dequeued | txn={transaction_id}")
+                    success = await send_unlock_to_cpo(charger_id, transaction_id)
+
+                    if not success:
+                        # Re-enqueue for retry — do not lose the unlock
+                        await redis_client.rpush(UNLOCK_QUEUE_KEY, raw)
+                        log.error(
+                            f"[{charger_id}] CPO unlock FAILED — re-queued | "
+                            f"txn={transaction_id} | OPS ALERT if repeated"
+                        )
+                        await asyncio.sleep(5)   # backoff before retry
+                except Exception as e:
+                    log.error(f"Cable lock consumer message error: {e}")
+
         except Exception as e:
-            log.error(f"Cable lock subscriber error: {e}")
+            # Connection dropped — reconnect after a short delay.
+            # Events remain safely in the Redis list while we are away.
+            log.error(f"Cable lock consumer connection lost, reconnecting: {e}")
+            await asyncio.sleep(3)
 
 
 async def send_unlock_to_cpo(charger_id: str,

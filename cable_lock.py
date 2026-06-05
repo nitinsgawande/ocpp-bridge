@@ -1,17 +1,23 @@
 """
 cable_lock.py
 -------------
-Publisher side of the cable lock controller.
+Publisher side of the cable unlock controller.
 
-Publishes an unlock event to Redis pub/sub channel unlock:{charger_id}
-after payment is confirmed.
+RELIABILITY MODEL — Redis LIST queue (not pub/sub).
 
-The subscriber lives in main.py (cable_lock_subscriber async task).
-On receiving the event, main.py calls the CPO REST API to send
-UnlockConnector — releasing the cable.
+Why a list, not pub/sub:
+  Redis pub/sub is at-most-once: if the subscriber is momentarily
+  disconnected when the event is published, the message is lost forever.
+  Cable unlock is payment-critical — it must never be lost. A Redis list
+  (RPUSH to enqueue, BLPOP to consume) persists the event until a consumer
+  reads it, giving at-least-once delivery that survives subscriber restarts
+  and dropped connections.
 
-Channel naming : unlock:{charger_id}
-Message payload: JSON with transaction_id and upi_txn_id
+Queue key : unlock_queue
+Enqueue   : publish_unlock()  → RPUSH
+Consume   : main.py cable_lock_subscriber() → BLPOP
+
+The consumer in main.py calls the CPO REST API to send UnlockConnector.
 """
 
 import json
@@ -27,22 +33,19 @@ r = redis.Redis.from_url(
     decode_responses=True
 )
 
-
-def unlock_channel(charger_id: str) -> str:
-    """Canonical Redis pub/sub channel name for a charger."""
-    return f"unlock:{charger_id}"
+UNLOCK_QUEUE_KEY = "unlock_queue"
 
 
 def publish_unlock(charger_id: str,
                    transaction_id: int,
                    upi_txn_id: str) -> bool:
     """
-    Publish an unlock event after payment is confirmed.
-    main.py cable_lock_subscriber receives this and calls CPO API.
+    Enqueue an unlock event after payment is confirmed.
+    Uses RPUSH onto a Redis list — the event persists until the
+    consumer (main.py) reads it via BLPOP. Survives subscriber restarts.
 
-    Returns True if at least one subscriber received the message.
+    Returns True if the event was enqueued.
     """
-    channel = unlock_channel(charger_id)
     message = json.dumps({
         "charger_id":     charger_id,
         "transaction_id": transaction_id,
@@ -50,19 +53,17 @@ def publish_unlock(charger_id: str,
         "action":         "UNLOCK_CONNECTOR"
     })
 
-    receivers = r.publish(channel, message)
-
-    if receivers > 0:
+    try:
+        queue_len = r.rpush(UNLOCK_QUEUE_KEY, message)
         log.info(
-            f"[{charger_id}] Unlock event PUBLISHED | "
+            f"[{charger_id}] Unlock event ENQUEUED | "
             f"txn={transaction_id} | "
-            f"channel={channel} | "
-            f"subscribers={receivers}"
+            f"queue_depth={queue_len}"
         )
         return True
-    else:
-        log.warning(
-            f"[{charger_id}] Unlock event published but NO subscribers | "
-            f"txn={transaction_id} — main.py may not be running"
+    except Exception as e:
+        log.error(
+            f"[{charger_id}] Failed to enqueue unlock event | "
+            f"txn={transaction_id} | error={e}"
         )
         return False
