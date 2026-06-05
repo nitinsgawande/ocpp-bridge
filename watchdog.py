@@ -149,25 +149,57 @@ def _handle_stale_charging(session: dict, charger_id: str,
         log.error(f"[{charger_id}] finalise_session returned None — txn={transaction_id}")
         return False
 
-    # Trigger UPI collect for last known amount
+    # Trigger payment for last known amount — capture from block if BLOCK_DEBIT
     driver_phone = session.get("id_tag", "").replace(IDTAG_PREFIX, "")
     if not driver_phone:
-        log.error(f"[{charger_id}] No driver phone — cannot trigger collect")
+        log.error(f"[{charger_id}] No driver phone — cannot collect")
         return False
 
-    from upi_collect import trigger_collect
-    trigger_collect(
-        charger_id=charger_id,
-        transaction_id=transaction_id,
-        amount_inr=session_data.get("cost_final", "0.00"),
-        driver_phone=driver_phone,
-        driver_name="EV Driver"
-    )
-    log.info(
-        f"[{charger_id}] Watchdog UPI collect triggered | "
-        f"txn={transaction_id} | "
-        f"amount=₹{session_data.get('cost_final')}"
-    )
+    payment_mode = session.get("payment_mode", "POSTPAID")
+    mandate_id   = session.get("mandate_id", "")
+    amount       = session_data.get("cost_final", "0.00")
+
+    if payment_mode == "BLOCK_DEBIT" and mandate_id:
+        # Power-failure on a block-debit session — capture from the pre-blocked
+        # funds. This is GUARANTEED to collect, even though the session ended
+        # abnormally with no StopTransaction. This is the key reason block-debit
+        # eliminates bad debt: it works even in the failure case.
+        from upi_collect import capture_block
+        import session_store as store_mod
+        from cable_lock import publish_unlock
+
+        capture = capture_block(
+            charger_id=charger_id,
+            transaction_id=transaction_id,
+            mandate_id=mandate_id,
+            exact_amount=amount
+        )
+        if capture and capture.get("status") == "CAPTURED":
+            store_mod.mark_paid(charger_id, transaction_id, capture["upi_txn_id"])
+            publish_unlock(charger_id, transaction_id, capture["upi_txn_id"])
+            log.info(
+                f"[{charger_id}] Watchdog CAPTURED ₹{amount} from block "
+                f"(power-failure recovery) | txn={transaction_id} | cable unlocking"
+            )
+        else:
+            # Capture failed — fall back to postpaid collect as safety net
+            log.error(f"[{charger_id}] Watchdog capture failed, falling back to collect")
+            from upi_collect import trigger_collect
+            trigger_collect(charger_id, transaction_id, amount, driver_phone, "EV Driver")
+    else:
+        # Pure postpaid session — send a UPI collect link
+        from upi_collect import trigger_collect
+        trigger_collect(
+            charger_id=charger_id,
+            transaction_id=transaction_id,
+            amount_inr=amount,
+            driver_phone=driver_phone,
+            driver_name="EV Driver"
+        )
+        log.info(
+            f"[{charger_id}] Watchdog UPI collect triggered | "
+            f"txn={transaction_id} | amount=₹{amount}"
+        )
     return True
 
 
