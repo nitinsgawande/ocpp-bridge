@@ -17,6 +17,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime
+import os
 from ocpp.routing import on
 from ocpp.v16 import ChargePoint as cp
 from ocpp.v16 import call, call_result
@@ -184,9 +185,11 @@ async def unlock_subscriber():
     Uses Redis pattern subscribe to catch all charger unlock channels
     with a single subscriber: unlock:*
     """
-    redis_client = aioredis.Redis(
-        host="localhost", port=6379, db=0, decode_responses=True
+    redis_client = aioredis.Redis.from_url(
+        os.getenv("REDIS_URL", "redis://localhost:6379/0"),
+        decode_responses=True
     )
+    
     pubsub = redis_client.pubsub()
 
     # Subscribe to all unlock channels using pattern matching
