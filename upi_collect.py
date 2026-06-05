@@ -265,15 +265,18 @@ def release_block(charger_id: str, transaction_id: int,
 def _provider_create_mandate(order_ref: str, amount: str,
                               driver_phone: str, driver_vpa: str) -> dict | None:
     """Create the block mandate with the payment provider."""
+    import uuid
+    unique_ref = f"{order_ref}_{uuid.uuid4().hex[:12]}"   # collision-free unique ref
+
     razorpay_key = os.getenv("RAZORPAY_KEY_ID", "")
     if not razorpay_key:
-        sim_mandate = f"MANDATE_SIM_{order_ref}"
+        sim_mandate = f"MANDATE_SIM_{unique_ref}"
         log.info(f"Simulated UPI block: {sim_mandate} for ₹{amount}")
         return {
             "mandate_id":     sim_mandate,
             "status":         "BLOCKED",
             "reserve_amount": amount,
-            "short_url":      f"https://rzp.io/sim/{order_ref}"
+            "short_url":      f"https://rzp.io/sim/{unique_ref}"
         }
     try:
         amount_paise = int(Decimal(amount) * 100)
@@ -281,7 +284,7 @@ def _provider_create_mandate(order_ref: str, amount: str,
             "amount":         amount_paise,
             "currency":       "INR",
             "accept_partial": False,
-            "reference_id":   order_ref,
+            "reference_id":   unique_ref,
             "description":    f"EV charging reserve block ₹{amount}",
             "customer":       {"contact": f"+91{driver_phone}"},
             "notify":         {"sms": True},
@@ -296,7 +299,6 @@ def _provider_create_mandate(order_ref: str, amount: str,
     except Exception as e:
         log.error(f"Razorpay block creation failed: {e}")
         return None
-
 
 def _provider_capture(mandate_id: str, amount: str) -> dict | None:
     """Capture the exact amount from the blocked mandate. Balance auto-released."""
