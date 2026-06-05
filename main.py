@@ -46,13 +46,28 @@ CPO_API_KEY     = os.getenv("CPO_API_KEY", "")
 
 # ─── Startup / shutdown ──────────────────────────────────────────────────────
 
+_background_tasks: set = set()
+
+
+def _spawn(coro):
+    """
+    Create a background task AND hold a strong reference to it.
+    Without a retained reference, asyncio may garbage-collect the task
+    mid-execution, producing 'Task was destroyed but it is pending'.
+    """
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     log.info("ChargeFlow bridge starting...")
     from db import create_indexes
     await create_indexes()
-    asyncio.create_task(startup_recovery())
-    asyncio.create_task(cable_lock_subscriber())
+    _spawn(startup_recovery())
+    _spawn(cable_lock_subscriber())
     yield
     log.info("ChargeFlow bridge shutting down.")
 
