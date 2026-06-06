@@ -112,7 +112,7 @@ echo "✅ Restarted chargeflow + chargeflow-celery"
 echo ""
 echo "── Step 4: Verifying clean state ───────────────"
 sleep 3
-SESSION_KEYS=$(redis-cli $TLS_FLAG -h "$REDIS_HOST" -p "$REDIS_PORT" -a "$REDIS_PASS" --no-auth-warning KEYS 'session:*' | wc -l)
+SESSION_KEYS=$(redis-cli $TLS_FLAG -h "$REDIS_HOST" -p "$REDIS_PORT" -a "$REDIS_PASS" --no-auth-warning KEYS 'session:*' | grep -c 'session:' || true)
 echo "Redis session keys remaining: $SESSION_KEYS"
 sudo journalctl -u chargeflow --no-pager -n 15 | grep -i "startup recovery" || true
 
